@@ -120,6 +120,12 @@ jobs:
           name: LotVulture_Windows_Installer
           path: ./dist-artifacts
 
+      - name: Generate Compose Files for Release
+        run: |
+          mkdir -p ./dist-artifacts
+          sed 's|image: .*|image: ghcr.io/${{ github.repository }}:${{ needs.version.outputs.version }}|g' docker-compose.yml > ./dist-artifacts/docker-compose.yml
+          sed 's|image: .*|image: ghcr.io/${{ github.repository }}:latest|g' docker-compose.yml > ./dist-artifacts/docker-compose.latest.yml
+
       - name: Create Release & Publish Assets
         uses: softprops/action-gh-release@v2
         with:
@@ -128,3 +134,6 @@ jobs:
           generate_release_notes: true
           files: |
             ./dist-artifacts/LotVulture_Setup_*.exe
+            ./dist-artifacts/docker-compose.yml
+            ./dist-artifacts/docker-compose.latest.yml
+

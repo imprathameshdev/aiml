@@ -1,8 +1,7 @@
 services:
   lotvulture:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: ghcr.io/lotvulture/lotvulture:${VULTURE_VERSION:-latest}
+    container_name: lotvulture
     ports:
       - "8000:8000"
     # Single named volume for all persistent state. The on-prem app
