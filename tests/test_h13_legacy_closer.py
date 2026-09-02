@@ -19,17 +19,31 @@ from fastapi.testclient import TestClient
 
 
 def test_legacy_ws_closer_get_route_is_removed():
-    """No GET handler should exist at /api/live/{camera_id}."""
+    """No broken legacy_ws_closer GET handler should exist at /api/live/{camera_id}."""
+    from backend.app import app
+    broken_get_routes = [
+        r for r in app.routes
+        if getattr(r, "path", "") == "/api/live/{camera_id}"
+        and "GET" in getattr(r, "methods", set())
+        and getattr(r, "name", "") == "legacy_ws_closer"
+    ]
+    assert broken_get_routes == [], (
+        f"H13 regression: broken legacy_ws_closer GET route should be removed, "
+        f"found {len(broken_get_routes)} route(s): {broken_get_routes}"
+    )
+
+
+def test_camera_live_occupancy_get_route_is_registered():
+    """Ensure the valid REST endpoint get_camera_live_occupancy is registered."""
     from backend.app import app
     get_routes = [
         r for r in app.routes
         if getattr(r, "path", "") == "/api/live/{camera_id}"
         and "GET" in getattr(r, "methods", set())
+        and getattr(r, "name", "") == "get_camera_live_occupancy"
     ]
-    assert get_routes == [], (
-        f"H13 regression: GET /api/live/{{camera_id}} should be removed, "
-        f"found {len(get_routes)} route(s): {get_routes}"
-    )
+    assert len(get_routes) == 1, "get_camera_live_occupancy GET route is missing"
+
 
 
 def test_legacy_ws_closer_ws_route_still_exists():
