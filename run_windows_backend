@@ -1,0 +1,42 @@
+#!/bin/bash
+# ---------------------------------------------------------------------------
+# Run the built Windows LotVulture backend (.exe) under Wine on Linux.
+#
+# Usage:
+#   ./run_windows_backend
+#   ./run_windows_backend --port 8001
+# ---------------------------------------------------------------------------
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+EXE_PATH="$SCRIPT_DIR/build/windows/dist/lotvulture/lotvulture.exe"
+WINE_PREFIX="${WINE_PREFIX:-$SCRIPT_DIR/build/windows/wine}"
+
+echo "======================================================================"
+echo "[NOTE] If you recently made code changes, remember to run:"
+echo "       ./windows/build_exe.sh"
+echo "       first to rebuild the Windows executable."
+echo "======================================================================"
+
+if [ ! -f "$EXE_PATH" ]; then
+    echo ""
+    echo "[WARNING] Windows executable not found at:"
+    echo "          $EXE_PATH"
+    echo "          Running './windows/build_exe.sh' now..."
+    echo ""
+    "$SCRIPT_DIR/windows/build_exe.sh"
+fi
+
+echo ""
+echo "[INIT] Cleaning up stale Wine processes..."
+wineserver -k 2>/dev/null || true
+sleep 1
+
+export WINEPREFIX="$WINE_PREFIX"
+export WINEDEBUG=-all
+
+echo "[INIT] Launching Lot Vulture Windows backend in Wine..."
+echo "[INIT] Dashboard will be available at: http://localhost:8000"
+echo ""
+
+exec wine "$EXE_PATH" -f --no-reload "$@"

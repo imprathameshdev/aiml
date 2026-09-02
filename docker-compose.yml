@@ -1,0 +1,38 @@
+services:
+  lotvulture:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    # Single named volume for all persistent state. The on-prem app
+    # resolves DATA_DIR to $VULTURE_LV_HOME (default /var/lib/lotvulture
+    # in containerized Linux) and writes the SQLite database, LMDB
+    # blob store, and logs there. Mounting the whole directory keeps
+    # SQLite's .db + .db-wal + .db-shm trio co-located and avoids the
+    # trap of bind-mounting individual files (which Docker doesn't
+    # handle well and which can leave the WAL files in the container's
+    # writable layer on first start).
+    volumes:
+      - lotvulture-data:/var/lib/lotvulture
+    environment:
+      - TZ=America/Chicago
+    # Optional: drop a .env file in the project root to override
+    # settings (VULTURE_BILLING_PORTAL_URL, VULTURE_HEARTBEAT_INTERVAL_SECONDS,
+    # etc.). The app also reads /var/lib/lotvulture/.env from inside
+    # the volume, so operators can persist overrides without rebuilding
+    # the image.
+    env_file:
+      - path: .env
+        required: false
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: unless-stopped
+
+volumes:
+  lotvulture-data:

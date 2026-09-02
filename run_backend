@@ -1,0 +1,11 @@
+#!/bin/bash
+
+# --- Local GPU Library Fix ---
+echo "[INIT] Setting up environment..."
+
+# Export PYTHONPATH so we can find the backend package
+export PYTHONPATH=$PYTHONPATH:.
+
+# Run the application, forwarding all arguments
+# We use the venv's python directly.
+exec ./venv/bin/python3 main.py "$@"

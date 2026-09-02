@@ -1,0 +1,34 @@
+END USER LICENSE AGREEMENT (EULA)
+Last Updated: August 29, 2026
+
+PLEASE READ THIS END USER LICENSE AGREEMENT ("AGREEMENT") CAREFULLY. BY CREATING AN ADMINISTRATOR ACCOUNT OR USING THE LOT VULTURE ON-PREMISES SOFTWARE, YOU ("LICENSEE" OR "CUSTOMER") AGREE TO BE BOUND BY THE TERMS OF THIS AGREEMENT AND THE LOT VULTURE SOURCE LICENSE.
+
+1. LICENSE GRANT & COEXISTENCE
+Subject to these terms and an active subscription in good standing, Lot Vulture LLC grants Licensee a non-exclusive, non-transferable, revocable license to install and run the Software on-premises. This Agreement and the Lot Vulture Source License govern the Software concurrently. The commercial features, neural network weights, and C++ inference engine models are proprietary; the Lot Vulture Source License governs the open repository and community version files.
+
+2. METERING & HEARTBEAT
+The Software periodically transmits a Heartbeat containing the Hardware ID (HWID) and active camera count to the cloud billing portal to verify license seats. If the connection fails or subscription expires, the Software downgrades to Community Mode automatically, falling back to a lower-accuracy community model. This is an intended function and does not constitute a breach of contract.
+
+3. RESTRICTIONS
+Licensee shall not decompile, disassemble, reverse engineer the proprietary binary components or commercial models, bypass licensing checks, or use the Software to build a competing product or managed service. Furthermore, Licensee shall not spoof, proxy, or artificially manipulate the Heartbeat telemetry or hardware identification to circumvent billing, seat limits, or licensing enforcement.
+
+4. DATA PRIVACY & FEEDBACK
+Licensee is solely responsible for compliance with video surveillance and privacy laws (e.g. posting signage). If Licensee uses "Improve AI" to upload corrections, Licensee grants Lot Vulture LLC a perpetual, irrevocable, worldwide, royalty-free license to use those images/annotations for retraining, and warrants that Licensee has obtained all necessary consents.
+
+5. AI ACCURACY & PARKING ENFORCEMENT
+THE SOFTWARE USES PROBABILISTIC AI MODELS. DETECTIONS MAY BE AFFECTED BY SHADOWS, WEATHER, LIGHTING, AND CAMERA ANGLES. LICENSEE SHALL NOT TOW, BOOT, TICKET, OR TAKE ANY ADVERSE ENFORCEMENT ACTION AGAINST VEHICLES SOLELY IN RELIANCE ON THE SOFTWARE. LICENSEE MUST MANUALLY VERIFY SPACE OCCUPANCY BEFORE ENFORCEMENT. LOT VULTURE LLC DISCLAIMS ALL LIABILITY FOR WRONGFUL TOWING, FINES, PROPERTY DAMAGE, OR PARKING DISPUTES.
+
+6. INDEMNIFICATION
+Licensee agrees to indemnify, defend, and hold harmless Lot Vulture LLC, its officers, employees, and agents from and against any claims, liabilities, damages, judgments, awards, losses, costs, expenses, or fees (including reasonable attorneys' fees) arising out of or relating to Licensee's violation of this Agreement or Licensee's use of the Software, including but not limited to wrongful towing, parking disputes, privacy violations, or failure to manually verify AI detections.
+
+7. WARRANTY DISCLAIMER, BUGS, & LIABILITY CAP
+THE SOFTWARE IS PROVIDED "AS IS" AND "AS AVAILABLE". LOT VULTURE LLC DOES NOT WARRANT THAT THE SOFTWARE IS BUG-FREE, ERROR-FREE, OR UNINTERRUPTED. TO THE MAXIMUM EXTENT PERMITTED BY LAW, LOT VULTURE LLC DISCLAIMS ALL WARRANTIES AND SHALL NOT BE LIABLE FOR ANY LOST PROFITS, LOST REVENUE, PROPERTY DAMAGE, DATA LOSS, OR CONSEQUENTIAL DAMAGES ARISING FROM SOFTWARE BUGS, CRASHES, OR OUTAGES. TOTAL AGGREGATE LIABILITY FOR ALL CLAIMS SHALL NOT EXCEED THE FEES ACTUALLY PAID BY LICENSEE IN THE PRECEDING 12 MONTHS (OR $50 IF NONE).
+
+8. NO UPTIME, SUPPORT RESPONSE TIMES, OR SLA
+LOT VULTURE LLC MAKES NO GUARANTEE OF UPTIME, CONTINUOUS SERVICE, OR HEARTBEAT AVAILABILITY. TECHNICAL SUPPORT IS PROVIDED ON A BEST-EFFORT BASIS ONLY. LOT VULTURE LLC DOES NOT GUARANTEE ANY RESPONSE TIMES, RESOLUTION TIMES, OR THAT INQUIRIES WILL BE ANSWERED. STANDARD LICENSES DO NOT INCLUDE A SERVICE LEVEL AGREEMENT (SLA).
+
+9. TERMINATION FOR BREACH
+Lot Vulture LLC may terminate this Agreement and the associated license immediately upon notice if Licensee breaches any provision of this Agreement. Upon termination, Licensee must immediately cease all use of the proprietary Software, permanently delete all proprietary binary files, commercial models, and license keys from all systems under Licensee's control, and confirm such deletion in writing if requested by Lot Vulture LLC.
+
+10. GOVERNING LAW & JURISDICTION
+This Agreement is governed by the laws of the State of Alabama, U.S.A. The state and federal courts located in Jefferson County, Alabama, shall have exclusive jurisdiction over any legal suits, actions, or proceedings arising out of or relating to this Agreement.

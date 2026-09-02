@@ -1,0 +1,34 @@
+#!/usr/bin/env python3
+import sys
+import argparse
+import os
+
+# Add the current directory to sys.path so we can import 'backend'
+sys.path.append(os.path.abspath(os.path.dirname(__file__)))
+
+from backend.cli import db as db_cli
+
+def main():
+    parser = argparse.ArgumentParser(description="Lot Vulture CLI Tool")
+    subparsers = parser.add_subparsers(dest="command", help="Available commands")
+
+    # DB group
+    db_parser = subparsers.add_parser("db", help="Database maintenance commands")
+    db_subparsers = db_parser.add_subparsers(dest="subcommand", help="Database subcommands")
+    db_subparsers.add_parser("compact", help="Run SQLite VACUUM and LMDB compaction")
+    db_subparsers.add_parser("prune", help="Manually trigger data pruning and aggregation")
+
+    args = parser.parse_args()
+
+    if args.command == "db":
+        if args.subcommand == "compact":
+            db_cli.compact()
+        elif args.subcommand == "prune":
+            db_cli.prune()
+        else:
+            db_parser.print_help()
+    else:
+        parser.print_help()
+
+if __name__ == "__main__":
+    main()

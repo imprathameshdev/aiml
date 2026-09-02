@@ -1,0 +1,12 @@
+# Build artifacts
+build/
+dist/
+*.exe
+*.zip
+*.whl
+*.nupkg
+nssm/
+
+# Python cache
+__pycache__/
+*.pyc

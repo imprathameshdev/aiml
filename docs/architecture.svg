@@ -1,0 +1,99 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 260" width="100%" height="100%">
+  <defs>
+    <linearGradient id="grad-blue" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#2563eb" />
+      <stop offset="100%" stop-color="#1d4ed8" />
+    </linearGradient>
+    <linearGradient id="grad-purple" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#7c3aed" />
+      <stop offset="100%" stop-color="#6d28d9" />
+    </linearGradient>
+    <linearGradient id="grad-emerald" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#059669" />
+      <stop offset="100%" stop-color="#047857" />
+    </linearGradient>
+    <linearGradient id="grad-amber" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#d97706" />
+      <stop offset="100%" stop-color="#b45309" />
+    </linearGradient>
+    <filter id="shadow" x="-5%" y="-10%" width="110%" height="130%">
+      <feDropShadow dx="0" dy="4" stdDeviation="4" flood-opacity="0.1" />
+    </filter>
+    <marker id="arrow" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 1 L 10 5 L 0 9 z" fill="#64748b" />
+    </marker>
+  </defs>
+
+  <style>
+    .card { rx: 8px; ry: 8px; filter: url(#shadow); }
+    .title { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 13px; font-weight: 700; fill: #ffffff; text-anchor: middle; }
+    .subtitle { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 11px; font-weight: 400; fill: #e2e8f0; text-anchor: middle; }
+    .flow-line { stroke: #94a3b8; stroke-width: 2; fill: none; marker-end: url(#arrow); }
+  </style>
+
+  <!-- Background container -->
+  <rect x="0" y="0" width="880" height="260" rx="12" fill="#0f172a" />
+
+  <!-- Node 1: Cameras -->
+  <g transform="translate(30, 95)">
+    <rect width="140" height="65" class="card" fill="url(#grad-blue)" />
+    <text x="70" y="30" class="title">RTSP / IP Cameras</text>
+    <text x="70" y="48" class="subtitle">Live Video &amp; Snaps</text>
+  </g>
+
+  <!-- Connection 1 -> 2 -->
+  <path d="M 170 127 L 210 127" class="flow-line" />
+
+  <!-- Node 2: FastAPI Ingestion -->
+  <g transform="translate(215, 95)">
+    <rect width="140" height="65" class="card" fill="url(#grad-blue)" />
+    <text x="70" y="30" class="title">FastAPI Backend</text>
+    <text x="70" y="48" class="subtitle">Frame Ingestion</text>
+  </g>
+
+  <!-- Connection 2 -> 3 -->
+  <path d="M 355 127 L 395 127" class="flow-line" />
+
+  <!-- Node 3: C++ Engine -->
+  <g transform="translate(400, 95)">
+    <rect width="155" height="65" class="card" fill="url(#grad-purple)" />
+    <text x="77" y="30" class="title">VultureVision C++</text>
+    <text x="77" y="48" class="subtitle">CUDA / DirectML / CPU</text>
+  </g>
+
+  <!-- Connection 3 -> 4 -->
+  <path d="M 555 127 L 595 127" class="flow-line" />
+
+  <!-- Node 4: Hysteresis Filter -->
+  <g transform="translate(600, 95)">
+    <rect width="130" height="65" class="card" fill="url(#grad-amber)" />
+    <text x="65" y="30" class="title">Hysteresis Filter</text>
+    <text x="65" y="48" class="subtitle">Debounce &amp; Stabilize</text>
+  </g>
+
+  <!-- Connections from 4 to Outputs -->
+  <path d="M 730 115 L 755 115 L 755 55 L 775 55" class="flow-line" />
+  <path d="M 730 127 L 775 127" class="flow-line" />
+  <path d="M 730 140 L 755 140 L 755 200 L 775 200" class="flow-line" />
+
+  <!-- Output 1: Storage -->
+  <g transform="translate(780, 25)">
+    <rect width="90" height="55" class="card" fill="url(#grad-emerald)" />
+    <text x="45" y="27" class="title">Storage</text>
+    <text x="45" y="42" class="subtitle">SQLite &amp; LMDB</text>
+  </g>
+
+  <!-- Output 2: UI Dashboard -->
+  <g transform="translate(780, 100)">
+    <rect width="90" height="55" class="card" fill="url(#grad-emerald)" />
+    <text x="45" y="27" class="title">Vue 3 UI</text>
+    <text x="45" y="42" class="subtitle">Live WebSocket</text>
+  </g>
+
+  <!-- Output 3: Alerts -->
+  <g transform="translate(780, 175)">
+    <rect width="90" height="55" class="card" fill="url(#grad-emerald)" />
+    <text x="45" y="27" class="title">Alerts</text>
+    <text x="45" y="42" class="subtitle">MQTT / Webhooks</text>
+  </g>
+</svg>

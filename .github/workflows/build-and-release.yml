@@ -1,0 +1,130 @@
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  version:
+    name: Generate Version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.ver.outputs.VERSION }}
+      short_sha: ${{ steps.ver.outputs.SHORT_SHA }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Determine Version
+        id: ver
+        run: |
+          SHORT_SHA=$(git rev-parse --short HEAD)
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            VERSION="${{ github.ref_name }}"
+          else
+            DATE_STR=$(date -u +'%Y.%m.%d')
+            VERSION="v${DATE_STR}-${SHORT_SHA}"
+          fi
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+          echo "SHORT_SHA=$SHORT_SHA" >> $GITHUB_OUTPUT
+          echo "Release version: $VERSION"
+
+  build_linux_docker:
+    name: Build & Publish Linux Docker
+    needs: version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          build-args: |
+            APP_VERSION=${{ needs.version.outputs.version }}
+          tags: |
+            ghcr.io/${{ github.repository }}:${{ needs.version.outputs.version }}
+            ghcr.io/${{ github.repository }}:latest
+
+  build_windows_exe:
+    name: Build Windows Installer EXE
+    needs: version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Build Prerequisites
+        run: |
+          sudo dpkg --add-architecture i386
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            wine \
+            wine64 \
+            wine32:i386 \
+            winetricks \
+            cabextract \
+            g++-mingw-w64-x86-64 \
+            gcc-mingw-w64-x86-64 \
+            cmake \
+            build-essential \
+            curl \
+            unzip \
+            zstd \
+            perl \
+            xvfb \
+            python3-pefile
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Build Windows Installer with Wine
+        env:
+          APP_VERSION: ${{ needs.version.outputs.version }}
+          WINEDEBUG: -all
+        run: |
+          xvfb-run -a ./windows/build.sh
+
+      - name: Upload Windows Installer Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: LotVulture_Windows_Installer
+          path: dist/LotVulture_Setup_*.exe
+
+  create_release:
+    name: Create GitHub Release
+    needs: [version, build_linux_docker, build_windows_exe]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Windows Installer Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: LotVulture_Windows_Installer
+          path: ./dist-artifacts
+
+      - name: Create Release & Publish Assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.version.outputs.version }}
+          name: Release ${{ needs.version.outputs.version }}
+          generate_release_notes: true
+          files: |
+            ./dist-artifacts/LotVulture_Setup_*.exe
