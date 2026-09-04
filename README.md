@@ -4,7 +4,7 @@
 [![License: PolyForm Shield](https://img.shields.io/badge/License-Lot%20Vulture%20Source%201.0%20(PolyForm%20Shield)-blue.svg)](./LICENSE.md)
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?logo=docker&logoColor=white)](https://github.com/lotvulture/lotvulture/pkgs/container/lotvulture)
 [![Platforms](https://img.shields.io/badge/Platform-Linux%20%7C%20Windows-lightgrey.svg)](#-quickstart)
-[![Hardware](https://img.shields.io/badge/Acceleration-CUDA%20%7C%20DirectML%20%7C%20CPU-success.svg)](#-hardware-optimization)
+[![Hardware](https://img.shields.io/badge/Inference-CPU%20(Free)%20%7C%20GPU%20(Commercial)-blue.svg)](#-community-vs-commercial-editions)
 [![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![Vue 3](https://img.shields.io/badge/Frontend-Vue%203%20%2B%20Vuetify-4FC08D?logo=vuedotjs&logoColor=white)](https://vuejs.org/)
 
@@ -34,7 +34,7 @@
 ## ✨ Core Features
 
 - 📍 **Interactive Visual Space Editor:** Define exact parking spots in seconds with a high-precision polygon canvas powered by Vue-Konva. Supports angled, parallel, and tight-row parking configurations.
-- ⚡ **High-Performance Edge AI Engine:** Powered by `vulturevision` (C++ ONNX Runtime with native DirectML on Windows and CUDA on Linux) with automatic CPU fallback.
+- ⚡ **High-Performance Edge AI Engine:** Powered by `vulturevision` (C++ ONNX Runtime with optimized CPU inference for Community Edition; CUDA & DirectML hardware acceleration in Commercial Edition).
 - 🔭 **Visual Scrubbing History Timeline:** Scrub through every minute of the day with second-by-second precision. Click any space to see exact visual snapshots of state transitions.
 - ⚙️ **Smart Sensitivity (Hysteresis Logic):** Dual-threshold certainty eliminates status bouncing during dusk, rain, snow, or transient occlusions.
 - 🔔 **Multi-Channel Alerting Subsystem:** Trigger Webhooks, MQTT messages (ideal for Home Assistant & smart signage), or Emails on lot capacity thresholds, single space transitions, or camera health events.
@@ -48,27 +48,26 @@
 ### Option 1: Windows Native Installer (Recommended for Windows)
 
 Download the latest standalone installer (`LotVulture_Setup_*.exe`) from the **[Releases](https://github.com/lotvulture/lotvulture/releases)** page.
-- Packages the complete web dashboard, C++ DirectML runtime, and background Windows service daemon.
+- Packages the complete web dashboard, C++ inference runtime, and background Windows service daemon.
 - No WSL, Docker, or external dependencies required.
 - Launch the app or open `http://localhost:8000` in your browser.
 
 ---
 
-### Option 2: Docker (Linux with GPU or CPU)
+### Option 2: Docker (Linux)
 
-Run the official container with GPU acceleration:
+Run the official container:
 
 ```bash
 docker run -d \
   --name lotvulture \
   --restart unless-stopped \
   -p 8000:8000 \
-  --gpus all \
   -v lotvulture-data:/var/lib/lotvulture \
   ghcr.io/lotvulture/lotvulture:latest
 ```
 
-*(If running on a system without an NVIDIA GPU, omit `--gpus all` — Lot Vulture will automatically utilize optimized CPU inference.)*
+*(Commercial Edition license holders running on NVIDIA GPUs can pass `--gpus all` to enable hardware acceleration.)*
 
 Access the dashboard at **`http://localhost:8000`**.
 
@@ -90,13 +89,14 @@ services:
       - VULTURE_LV_HOME=/var/lib/lotvulture
     volumes:
       - lotvulture-data:/var/lib/lotvulture
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
+    # Optional GPU reservation for Commercial Edition:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
 ```
 
 Run with:
@@ -126,10 +126,10 @@ Lot Vulture is source-available with a commercial tier:
 | Feature | Community Edition | Commercial License |
 | :--- | :---: | :---: |
 | **Inference Model** | Bundled Standard Model | High-Accuracy Commercial Model |
+| **Inference Hardware** | Optimized CPU | GPU (CUDA / DirectML) + CPU |
 | **Visual Space Editor & Live Dashboard** | ✅ Included | ✅ Included |
 | **Visual History Timeline & Scrubbing** | ✅ Included | ✅ Included |
 | **Webhooks & MQTT Alerts** | ✅ Included | ✅ Included |
-| **GPU Acceleration (CUDA / DirectML)** | ✅ Included | ✅ Included |
 | **Commercial Monitoring Services** | ✅ Permitted (with baseline model) | ✅ Permitted (with licensed seats) |
 | **Cloud Telemetry & Continuous Retraining** | — | ✅ Included |
 | **Priority Support & Multi-Camera Scaling** | Community | Dedicated |
