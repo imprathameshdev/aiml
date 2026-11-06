@@ -433,6 +433,15 @@ const openEditDialog = (cam) => {
 }
 
 const saveCamera = async () => {
+  if (!editedItem.value.name || !editedItem.value.name.trim()) {
+    showSnackbar("Camera name is required", "error");
+    return;
+  }
+  if (editedItem.value.source_type === 'video' && !editingId.value && !videoFile.value) {
+    showSnackbar("Please select a video file (.mp4, .avi) for the video camera", "error");
+    return;
+  }
+
   saving.value = true
   uploadProgress.value = 0
   try {
@@ -481,8 +490,10 @@ const saveCamera = async () => {
     
     dialog.value = false
     fetchCameras()
+    showSnackbar(`Camera "${editedItem.value.name}" saved successfully`);
   } catch (error) {
     console.error("Error saving camera:", error);
+    showSnackbar(error.response?.data?.detail || "Error saving camera", "error");
   } finally {
     saving.value = false
   }

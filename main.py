@@ -17,7 +17,7 @@ import glob
 # so this is a no-op there.
 _foreground = False
 
-if sys.platform == "win32":
+if sys.platform == "win32" and getattr(sys, "frozen", False):
     _parser = argparse.ArgumentParser(add_help=False)
     _parser.add_argument("-f", "--foreground", action="store_true")
     _foreground = _parser.parse_known_args()[0].foreground
@@ -40,9 +40,6 @@ _instance_mutex = None
 if sys.platform == "win32":
     from backend._windows_env import setup_windows_env, enforce_single_instance
     setup_windows_env()
-    # Enforce single instance unless running diagnostic or help commands
-    if not any(arg in sys.argv for arg in ("--diag", "-h", "--help")):
-        _instance_mutex = enforce_single_instance(interactive=True)
 else:
     # Import-only on non-Windows so PyInstaller's static analysis
     # picks the module up.  Calling setup_windows_env() would fail
@@ -90,6 +87,11 @@ else:
 from backend.logging_config import setup_logging
 
 if __name__ == "__main__":
+    if sys.platform == "win32" and not any(arg in sys.argv for arg in ("--diag", "-h", "--help")):
+        import multiprocessing
+        if multiprocessing.current_process().name == "MainProcess":
+            _instance_mutex = enforce_single_instance(interactive=True)
+
     parser = argparse.ArgumentParser(description="Lot Vulture Runner")
     parser.add_argument("--debug", action="store_true", help="Enable debug logging")
     parser.add_argument("--profile-memory", action="store_true", help="Enable memory allocation tracing (High Overhead)")

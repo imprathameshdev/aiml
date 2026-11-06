@@ -41,6 +41,40 @@ if "vulturevision" not in sys.modules:
         sys.modules["vulturevision"] = _vv_mod
         sys.modules["vulturevision._vulturevision"] = _vv_c_mod
 
+# Stub gi / GStreamer on Windows when running standalone unit tests without bundled MinGW GStreamer
+if "gi" not in sys.modules:
+    try:
+        import gi
+    except ImportError:
+        from unittest.mock import MagicMock
+        _gi_mock = MagicMock()
+        sys.modules["gi"] = _gi_mock
+        sys.modules["gi.repository"] = _gi_mock
+        sys.modules["gi.repository.Gst"] = _gi_mock.Gst
+        sys.modules["gi.repository.GstApp"] = _gi_mock.GstApp
+        sys.modules["gi.repository.GstVideo"] = _gi_mock.GstVideo
+        sys.modules["gi.repository.GLib"] = _gi_mock.GLib
+
+# Stub opentelemetry instrumentors if not present in the environment
+try:
+    import opentelemetry.instrumentation.fastapi
+except ImportError:
+    from unittest.mock import MagicMock
+    _otel_mock = MagicMock()
+    sys.modules["opentelemetry.instrumentation"] = _otel_mock
+    sys.modules["opentelemetry.instrumentation.fastapi"] = _otel_mock
+    sys.modules["opentelemetry.instrumentation.sqlalchemy"] = _otel_mock
+
+# Stub paho mqtt if not present in the environment
+try:
+    import paho.mqtt.client
+except ImportError:
+    from unittest.mock import MagicMock
+    _paho_mock = MagicMock()
+    sys.modules["paho"] = _paho_mock
+    sys.modules["paho.mqtt"] = _paho_mock
+    sys.modules["paho.mqtt.client"] = _paho_mock
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine

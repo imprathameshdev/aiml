@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func, text
 from . import models, database, inference
 from .stream_manager import stream_manager
+from . import obstruction
 from .logging_config import vulture_logger as logger
 
 _state_cache = {}
@@ -244,7 +245,7 @@ async def _run_loop():
 
             for sp_meta in spaces_data:
                 sp_id = sp_meta['id']
-                prob = probs_dict.get(sp_id, 0.0)
+                prob = probs_dict[sp_id]
                 prev_state = _state_cache.get(cam_id, {}).get(sp_id, {}).get("occupied", False)
 
                 if prob > occ_thresh: occupied = True
@@ -263,7 +264,8 @@ async def _run_loop():
                 "inference_speed": elapsed,
                 "timestamp": scan_time.isoformat(),
                 "scan_id": scan.id,
-                "is_processing": False
+                "is_processing": False,
+                "detection_error": None
             }
             db.commit()
             return changed_spaces, change_details, scan_time, scan.id
@@ -309,6 +311,7 @@ async def _run_loop():
                 "timestamp": scan_time.isoformat(),
                 "scan_id": scan.id,
                 "is_processing": False,
+                "detection_error": None,
             }
             db.commit()
             return scan.id
@@ -368,6 +371,8 @@ async def _run_loop():
                         for cam in cams_data:
                             if _stop_event.is_set(): break
                             cam_id, cam_name = cam['id'], cam['name']
+                            if await asyncio.to_thread(obstruction.is_enabled, cam_id):
+                                continue
                             
                             # --- PHASE 1: Image Acquisition (No DB lock) ---
                             content = None
@@ -385,7 +390,8 @@ async def _run_loop():
                                         if cam_id in stream_manager.streams and stream_manager.streams[cam_id]['active']:
                                             stream_was_active = True
 
-                                    stream_manager.start_stream(
+                                    await asyncio.to_thread(
+                                        stream_manager.start_stream,
                                         cam_id, 
                                         cam['source_type'], 
                                         cam['stream_url'], 
@@ -479,6 +485,8 @@ async def _run_loop():
                             if _stop_event.is_set(): break
                             logger.debug("Finished inference for camera: {name} ({w}x{h}) in {ms:.0f}ms", name=cam_name, w=actual_res[0], h=actual_res[1], ms=elapsed*1000)
 
+                            if await asyncio.to_thread(obstruction.is_enabled, cam_id):
+                                continue
                             # --- PHASE 4: Save Results ---
                             changed_spaces, change_details, scan_time, scan_id = await asyncio.to_thread(
                                 _do_save_results, cam_id, elapsed, content, spaces_data, probs_dict, occ_thresh, free_thresh, max_snap_res
@@ -489,6 +497,10 @@ async def _run_loop():
                                 await asyncio.to_thread(_do_save_events, change_details, crops, scan_time)
 
             except Exception as e:
+                if 'cam_id' in locals():
+                    metadata = _state_cache.setdefault(cam_id, {}).setdefault('metadata', {})
+                    metadata['is_processing'] = False
+                    metadata['detection_error'] = 'Detection failed; previous result retained'
                 logger.error("Scheduler loop internal error: {e}", e=e)
             
             elapsed = time.perf_counter() - last_run_start_time

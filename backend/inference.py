@@ -13,20 +13,14 @@ import threading
 import numpy as np
 from concurrent.futures import ThreadPoolExecutor
 from . import models, database
+ENGINE_IMPORT_ERROR = None
 try:
     from vulturevision import VultureVision
-except ImportError:
-    # Fallback stub when running in development/test environments without the compiled C++ wheel
-    class VultureVision:  # type: ignore
+except ImportError as exc:
+    ENGINE_IMPORT_ERROR = str(exc)
+    class VultureVision:
         def __init__(self, *args, **kwargs):
-            pass
-        def predict(self, *args, **kwargs):
-            return []
-        def detect(self, *args, **kwargs):
-            return []
-        @staticmethod
-        def get_available_gpu_provider():
-            return {"provider": "", "error": "vulturevision engine not installed"}
+            raise RuntimeError("Detection engine unavailable. Start with the repaired Python 3.12 launcher.")
 from .billing.enforcer import resolve_license
 from .logging_config import vulture_logger as logger
 
@@ -104,16 +98,16 @@ def get_vulturevision(license_key=None, instance_id=None):
             # every 60 seconds on hosts without a GPU. The operator can
             # still opt in to GPU via the Settings page once a row with
             # value="cuda" is written by init_db.py or the UI.
-            use_gpu = (device_setting.value == "cuda") if device_setting else False
+            use_gpu = (device_setting.value in ("cuda", "dml", "gpu")) if device_setting else False
 
             from .billing.session import default_session
             from .billing.enforcer import compute_mode, COMMUNITY
             sess = default_session()
             mode = compute_mode(sess)
 
-            if use_gpu and mode == COMMUNITY:
-                logger.warning("GPU processing is a commercial-only feature. Downgrading to CPU mode for community license.")
-                use_gpu = False
+            # Note: The underlying C++ EngineManager supports DirectML and CUDA
+            # execution seamlessly for both community and commercial models.
+            # We preserve GPU acceleration whenever requested by the operator.
 
             max_res_setting = db.query(models.Setting).filter_by(key="max_inference_resolution").first()
             max_res = int(max_res_setting.value) if max_res_setting else 1440
@@ -214,7 +208,7 @@ async def run_inference(camera_id: int, image_bytes: bytes, spaces: list, max_re
     
     # Offload decoding to thread
     img = await asyncio.to_thread(cv2.imdecode, np.frombuffer(image_bytes, np.uint8), cv2.IMREAD_COLOR)
-    if img is None: return {}, 0.0, (0, 0)
+    if img is None: raise ValueError("Cannot decode inference image")
     
     # 1. Prepare ROIs for VultureVision (N, 4, 2) normalized
     rois = []
@@ -222,7 +216,7 @@ async def run_inference(camera_id: int, image_bytes: bytes, spaces: list, max_re
     for s in spaces:
         pts = s['points']
         if isinstance(pts, str): pts = json.loads(pts)
-        if len(pts) != 8: continue
+        if len(pts) != 8: raise ValueError("A detection area must have exactly four corners")
         rois.append([[pts[i], pts[i+1]] for i in range(0, 8, 2)])
         space_ids.append(s['id'])
     
@@ -259,7 +253,10 @@ async def run_inference(camera_id: int, image_bytes: bytes, spaces: list, max_re
         )
         
         elapsed = time.perf_counter() - start_time
-        probs_dict = {sid: float(p) for sid, p in zip(space_ids, probs)}
+        values = np.asarray(probs, dtype=np.float32).reshape(-1)
+        if len(values) != len(space_ids) or not np.all(np.isfinite(values)) or np.any((values < 0) | (values > 1)):
+            raise RuntimeError("Detection engine returned missing or invalid probabilities")
+        probs_dict = {sid: float(p) for sid, p in zip(space_ids, values)}
         return probs_dict, elapsed, img.shape[1::-1]
         
     except Exception as e:
@@ -326,12 +323,17 @@ def get_gpu_provider():
     """Returns the GPU provider name available, or empty string if none.
 
     Thin pass-through to ``vulturevision.get_gpu_provider``,
-    which executes the C++ probe in a separate subprocess.
+    which executes the C++ probe in a separate subprocess on Linux
+    to avoid cuDNN .init constructor segfaults on missing dependencies.
+    On Windows or frozen PyInstaller environments, we probe directly
+    in-process to avoid the single-instance mutex deadlock/timeout.
     """
     import sys
     is_test = "pytest" in sys.modules or "unittest" in sys.modules
+    is_windows = sys.platform == "win32"
+    is_frozen = getattr(sys, "frozen", False)
 
-    if is_test:
+    if is_test or is_windows or is_frozen:
         try:
             from vulturevision import _vulturevision
             result = _vulturevision.get_available_gpu_provider()
@@ -341,7 +343,7 @@ def get_gpu_provider():
             error = result.get("error", "")
             if not provider and not error:
                 error = (
-                    "CUDAExecutionProvider could not be loaded. Run the "
+                    "Execution provider could not be loaded. Run the "
                     "probe directly from a Python shell to see stderr output."
                 )
             return {"provider": provider, "error": error}

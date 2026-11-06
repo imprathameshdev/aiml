@@ -8,12 +8,23 @@ import hashlib
 import numpy as np
 from .logging_config import vulture_logger as logger
 from .config import config
+from .video_frames import copy_bgr_frame
 
 # We use gi.repository for direct GStreamer access
-import gi
-gi.require_version('Gst', '1.0')
-gi.require_version('GstApp', '1.0')
-from gi.repository import Gst, GstApp, GLib
+try:
+    import gi
+    gi.require_version('Gst', '1.0')
+    gi.require_version('GstApp', '1.0')
+    gi.require_version('GstVideo', '1.0')
+    from gi.repository import Gst, GstApp, GstVideo, GLib
+    HAS_GI = True
+except (ImportError, ValueError, AttributeError) as _e:
+    HAS_GI = False
+    from unittest.mock import MagicMock
+    Gst = MagicMock()
+    GstApp = MagicMock()
+    GstVideo = MagicMock()
+    GLib = MagicMock()
 
 class StreamManager:
     _instance = None
@@ -44,7 +55,7 @@ class StreamManager:
 
     def _ensure_gst(self):
         """Lazily initialize GStreamer on first use."""
-        if self._gst_initialized:
+        if not HAS_GI or self._gst_initialized:
             return
         logger.info("GStreamer init starting...")
         Gst.init(None)
@@ -177,10 +188,24 @@ class StreamManager:
             return pipeline
         
         if source_type == "rtsp":
-            rtsp_url = url
+            from urllib.parse import urlsplit, urlunsplit, quote, unquote
+            parsed = urlsplit(url)
             if user and password:
-                proto, rest = url.split("://", 1)
-                rtsp_url = f"{proto}://{user}:{password}@{rest}"
+                user_q = quote(unquote(user), safe='')
+                pass_q = quote(unquote(password), safe='')
+                hostport = parsed.netloc.split('@')[-1]
+                netloc = f"{user_q}:{pass_q}@{hostport}"
+                rtsp_url = urlunsplit((parsed.scheme or "rtsp", netloc, parsed.path, parsed.query, parsed.fragment))
+            elif '@' in parsed.netloc:
+                userinfo, hostport = parsed.netloc.rsplit('@', 1)
+                if ':' in userinfo:
+                    u, p = userinfo.split(':', 1)
+                    netloc = f"{quote(unquote(u), safe='')}:{quote(unquote(p), safe='')}@{hostport}"
+                else:
+                    netloc = f"{quote(unquote(userinfo), safe='')}@{hostport}"
+                rtsp_url = urlunsplit((parsed.scheme or "rtsp", netloc, parsed.path, parsed.query, parsed.fragment))
+            else:
+                rtsp_url = url
 
             pipeline = (
                 f'rtspsrc location="{rtsp_url}" latency=500 ! queue name=net_probe_{camera_id} ! rtph264depay ! '
@@ -202,13 +227,37 @@ class StreamManager:
             return pipeline
         
         if source_type == "video":
-            if not os.path.exists(url):
+            if not url:
+                logger.error("No video file path configured for camera {cid}", cid=camera_id)
+                return None
+
+            # Resolve video path: supports absolute paths and relative paths
+            # against DATA_DIR, current working directory, or application root.
+            resolved = None
+            candidates = [
+                url,
+                os.path.join(config.DATA_DIR, url) if not os.path.isabs(url) else None,
+                os.path.join(os.getcwd(), url) if not os.path.isabs(url) else None,
+                os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), url) if not os.path.isabs(url) else None,
+            ]
+            for candidate in candidates:
+                if candidate and os.path.exists(candidate):
+                    resolved = os.path.abspath(candidate)
+                    break
+
+            if not resolved or not os.path.exists(resolved):
                 logger.error("Video file not found for camera {cid}: {path}", cid=camera_id, path=url)
                 return None
-            
+
+            # Crucial: GStreamer's gst_parse_launch treats backslashes inside quotes
+            # as C-style escape characters. On Windows, a path like "uploads\cameras\video.mp4"
+            # has '\v' escaped to vertical tab, corrupting the filename into "camerasvideo.mp4".
+            # Normalizing to forward slashes is standard and fully supported by GStreamer.
+            gst_url = resolved.replace('\\', '/')
+
             # For files, sync=true is vital to avoid reading at 1000fps
             pipeline = (
-                f'filesrc location="{url}" ! queue name=net_probe_{camera_id} ! decodebin ! videoconvert ! '
+                f'filesrc location="{gst_url}" ! queue name=net_probe_{camera_id} ! decodebin ! videoconvert ! '
                 f'video/x-raw,format=BGR {rate_limit} ! '
                 f'appsink name=sink_{camera_id} emit-signals=true sync=true drop=true max-buffers=1'
             )
@@ -377,6 +426,18 @@ class StreamManager:
                 threading.Thread(target=thumb_poller, daemon=True, name=f"YouTube-ThumbPoller-Cam{camera_id}").start()
                 return
 
+            if not HAS_GI:
+                # GStreamer unavailable — fall back to OpenCV VideoCapture (uses FFmpeg backend)
+                # This handles rtsp and video source types using cv2 on the system Python.
+                if source_type in ("rtsp", "video"):
+                    self._start_opencv_stream(camera_id, source_type, url, user, password, fps, res)
+                else:
+                    logger.warning(
+                        "GStreamer (gi) is not available and no fallback for source_type={st} on camera {cid}",
+                        st=source_type, cid=camera_id,
+                    )
+                return
+
             self._ensure_gst()
 
             pipeline = None
@@ -479,7 +540,16 @@ class StreamManager:
                     if not self.manager_active or stream_data['shutdown_flag']:
                         return Gst.FlowReturn.OK
 
-                    frame = np.frombuffer(info.data, dtype=np.uint8).reshape((height, width, 3)).copy()
+                    # BGR rows are aligned by GStreamer; width * 3 need
+                    # not equal the row stride. Reshaping the whole buffer
+                    # raises for padded widths and prevents every frame
+                    # from reaching the snapshot endpoint.
+                    video_info = GstVideo.VideoInfo.new_from_caps(caps)
+                    video_meta = GstVideo.buffer_get_video_meta(buf)
+                    layout = video_meta if video_meta is not None else video_info
+                    frame = copy_bgr_frame(
+                        info.data, width, height, layout.stride[0], layout.offset[0],
+                    )
                     now = time.time()
                     with stream_data['lock']:
                         stream_data['last_frame'] = frame
@@ -529,7 +599,11 @@ class StreamManager:
                 elif t == Gst.MessageType.EOS:
                     if source_type == "video":
                         logger.debug("Looping video for camera {cid}", cid=camera_id)
-                        pipeline.seek_simple(Gst.Format.TIME, Gst.SeekFlags.FLUSH | Gst.SeekFlags.KEY_UNIT, 0)
+                        seek_ok = pipeline.seek_simple(Gst.Format.TIME, Gst.SeekFlags.FLUSH | Gst.SeekFlags.KEY_UNIT, 0)
+                        if not seek_ok:
+                            logger.info("Seek on EOS failed for camera {cid}, resetting pipeline to loop", cid=camera_id)
+                            pipeline.set_state(Gst.State.READY)
+                            pipeline.set_state(Gst.State.PLAYING)
                     else:
                         logger.warning("Stream End-of-Stream (Cam {cid})", cid=camera_id)
                         self.stop_stream(camera_id)
@@ -540,6 +614,87 @@ class StreamManager:
 
             stream_data['bus_id'] = bus.connect("message", on_message)
             pipeline.set_state(Gst.State.PLAYING)
+
+    def _start_opencv_stream(self, camera_id, source_type, url, user=None,
+                             password=None, fps=5, res="1080"):
+        """Read frames on a worker when GStreamer is unavailable."""
+        from urllib.parse import urlsplit, urlunsplit, quote, unquote
+        if not url:
+            return
+        capture_url = url
+        if source_type == "rtsp":
+            parsed = urlsplit(url)
+            host = parsed.netloc.rsplit('@', 1)[-1]
+            if user:
+                credentials = quote(str(user), safe='') + ':' + quote(str(password or ''), safe='')
+            elif '@' in parsed.netloc:
+                username, _, secret = parsed.netloc.rsplit('@', 1)[0].partition(':')
+                credentials = quote(unquote(username), safe='') + ':' + quote(unquote(secret), safe='')
+            else:
+                credentials = None
+            capture_url = urlunsplit((parsed.scheme or 'rtsp',
+                (credentials + '@' if credentials else '') + host,
+                parsed.path, parsed.query, parsed.fragment))
+        else:
+            candidates = [url, os.path.join(config.DATA_DIR, url),
+                os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), url)]
+            capture_url = next((os.path.abspath(p) for p in candidates if os.path.isfile(p)), url)
+        previous = self.streams.get(camera_id)
+        if previous is not None:
+            previous['active'] = False
+            previous['shutdown_flag'] = True
+            self._teardown_components(previous, camera_id)
+        stop_event = threading.Event()
+        data = dict(pipeline=None, proc=None, source_type=source_type, youtube_mode=None,
+            url=url, user=user, password=password, res=res, fps=fps,
+            last_frame=None, last_frame_time=0, active=True, shutdown_flag=False,
+            lock=threading.Lock(), frames_received=0, frames_dropped=0,
+            bytes_recent=[], network_bytes_recent=[], start_time=time.time(),
+            errors=[], handler_id=None, bus_id=None, stop_event=stop_event)
+        self.streams[camera_id] = data
+
+        def capture_worker():
+            cap = None
+            try:
+                # Timeouts keep camera disconnects from blocking indefinitely.
+                cap = cv2.VideoCapture(capture_url, cv2.CAP_FFMPEG, [
+                    cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 4000,
+                    cv2.CAP_PROP_READ_TIMEOUT_MSEC, 4000])
+                if not cap.isOpened():
+                    raise RuntimeError('Could not open camera/video source')
+                interval = 1.0 / max(1.0, float(fps or 5))
+                last_publish = 0.0
+                native_fps = cap.get(cv2.CAP_PROP_FPS) if source_type == 'video' else 0
+                while not stop_event.is_set():
+                    started = time.monotonic()
+                    ok, frame = cap.read()
+                    if not ok or frame is None:
+                        raise RuntimeError('Source stopped delivering frames')
+                    now = time.monotonic()
+                    if now - last_publish >= interval:
+                        with data['lock']:
+                            data['last_frame'] = frame.copy()
+                            data['last_frame_time'] = time.time()
+                            data['frames_received'] += 1
+                            data['bytes_recent'].append((time.time(), frame.nbytes))
+                            data['bytes_recent'] = data['bytes_recent'][-500:]
+                        last_publish = now
+                    # Drain RTSP continuously; pace local files at source FPS.
+                    if native_fps and native_fps > 0:
+                        stop_event.wait(max(0, 1.0 / native_fps - (time.monotonic() - started)))
+            except Exception:
+                data['errors'].append('OpenCV capture failed; check connectivity and credentials')
+                logger.warning('OpenCV capture failed for camera {cid}', cid=camera_id)
+            finally:
+                if cap is not None:
+                    cap.release()
+                data['active'] = False
+                if self.streams.get(camera_id) is data and not stop_event.is_set():
+                    self.cooldowns[camera_id] = time.time()
+        worker = threading.Thread(target=capture_worker, daemon=True,
+            name=f'OpenCV-Cam{camera_id}')
+        data['worker'] = worker
+        worker.start()
 
     def get_latest_frame(self, camera_id, since=None):
         if camera_id in self.streams:
@@ -627,6 +782,12 @@ class StreamManager:
             return
         logger.info("Stopping stream for camera {cid} and clearing internal resources", cid=camera_id)
 
+        if data.get('stop_event'):
+            data['stop_event'].set()
+        worker = data.get('worker')
+        if worker is not None and worker is not threading.current_thread():
+            worker.join(timeout=9.0)
+
         pipeline = data.get('pipeline')
 
         # 1. Kill yt-dlp subprocess if it exists
@@ -668,8 +829,6 @@ class StreamManager:
         if 'proc' in data: del data['proc']
 
     def stop_stream(self, camera_id, remove=False):
-        if not self._gst_initialized:
-            return
         
         # We use a localized lock check to prevent global deadlocks
         data = None

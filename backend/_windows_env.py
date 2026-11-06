@@ -135,6 +135,31 @@ def setup_windows_env() -> None:
     # _vulturevision.pyd (it failed to import during Wine-based analysis),
     # so we intercept the import and load it directly from the filesystem.
     _install_vulturevision_hook(base)
+    _install_backend_hook(base)
+
+
+def _install_backend_hook(base: str) -> None:
+    """Install a meta_path finder that loads updated backend modules from disk."""
+    backend_dir = os.path.join(base, "backend")
+    if not os.path.isdir(backend_dir):
+        return
+
+    class BackendFinder(importlib.abc.MetaPathFinder):
+        def find_spec(self, fullname, path, target=None):
+            if fullname == "backend" or fullname.startswith("backend."):
+                parts = fullname.split(".")
+                rel_path = os.path.join(base, *parts)
+                py_file = rel_path + ".py"
+                init_file = os.path.join(rel_path, "__init__.py")
+                if os.path.isfile(py_file):
+                    return importlib.util.spec_from_file_location(fullname, py_file)
+                elif os.path.isfile(init_file):
+                    spec = importlib.util.spec_from_file_location(fullname, init_file)
+                    spec.submodule_search_locations = [rel_path]
+                    return spec
+            return None
+
+    sys.meta_path.insert(0, BackendFinder())
 
 
 def _install_vulturevision_hook(base: str) -> None:

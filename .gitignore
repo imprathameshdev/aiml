@@ -1,5 +1,7 @@
 venv/
 .venv/
+.venv312/
+*-backup-*/
 storage_blobs.mdb/
 __pycache__/
 uploads/cameras/*

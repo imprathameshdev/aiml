@@ -404,27 +404,36 @@
             
             <v-chip 
               size="small" 
-              :color="cam.occupiedCount > 0 ? 'error' : 'success'" 
+              :color="detectionUnknown(cam) ? 'grey' : (cam.occupiedCount > 0 ? 'error' : 'success')" 
               variant="flat" 
               class="mr-1"
               :class="{ 'cursor-pointer': hasPermission('manage_cameras') }"
               @click="hasPermission('manage_cameras') ? router.push('/editor/' + cam.id) : null"
               :title="hasPermission('manage_cameras') ? 'Click to edit parking spaces' : ''"
             >
-              {{ cam.occupiedCount }}/{{ cam.totalSpaces }}
+              {{ detectionUnknown(cam) ? 'Detection unavailable' : cam.occupiedCount + '/' + cam.totalSpaces }}
             </v-chip>
             
+            <v-btn v-if="hasPermission('manage_cameras') && supportsLivePreview(cam)"
+              size="small" variant="text" :loading="cam.calibrating" @click="saveEmptyReference(cam)">
+              {{ cam.detectionMode === 'obstruction_test' ? 'Reset empty' : 'Test objects' }}
+            </v-btn>
+            <v-btn v-if="hasPermission('manage_cameras') && cam.detectionMode === 'obstruction_test'"
+              size="small" variant="text" @click="useVehicleMode(cam)">Car mode</v-btn>
             <v-btn icon="mdi-arrow-expand" size="small" variant="text" @click="expandCamera(cam)"></v-btn>
           </v-toolbar>
           
           <v-divider></v-divider>
           
-          <div :id="'konva-wrapper-' + cam.id" class="konva-wrapper bg-black">
+          <div :id="'konva-wrapper-' + cam.id" class="konva-wrapper bg-black" :style="{ minHeight: supportsLivePreview(cam) ? '180px' : undefined }">
+            <LiveCameraPreview v-if="supportsLivePreview(cam)" :camera-id="cam.id"
+              :active="cam.isIntersecting && !(expandedDialog && selectedCamera?.id === cam.id)"
+              @dimensions="image => previewDimensions(cam, image)" />
             <!-- Top Overlay for Metadata -->
             <div class="camera-metadata-overlay pa-2 d-flex align-center w-100">
               <v-chip size="x-small" variant="flat" color="grey-darken-4" class="text-white mr-1 backdrop-blur border">
                 <v-icon start icon="mdi-clock-outline" size="x-small"></v-icon>
-                {{ getRelativeTime(cam.lastUpdated) }}
+                {{ detectionUnknown(cam) ? (cam.detectionError || 'Awaiting detection') : (cam.detectionMode === 'obstruction_test' ? 'Object test: ' : 'Car result: ') + getRelativeTime(cam.lastUpdated) }}
               </v-chip>
               <v-chip size="x-small" variant="flat" color="grey-darken-4" class="text-white backdrop-blur border">
                 <v-icon start icon="mdi-speedometer" size="x-small"></v-icon>
@@ -440,6 +449,7 @@
 
             <v-stage 
               v-if="cam.bgImage"
+              style="position: relative; z-index: 1"
               @click="(e) => handleStageClick(e, cam)"
               @mousemove="(e) => handleMouseMove(e, cam)"
               :config="{
@@ -450,7 +460,7 @@
               }"
             >
               <v-layer>
-                <v-image :config="{ image: cam.bgImage }" />
+                <v-image v-if="!supportsLivePreview(cam)" :config="{ image: cam.bgImage }" />
                 <v-line
                   v-for="space in cam.spaces"
                   :key="space.id"
@@ -465,8 +475,8 @@
                   }"
                   :config="{
                     points: space.points,
-                    fill: space.occupied ? 'rgba(244, 67, 54, 0.4)' : 'rgba(76, 175, 80, 0.4)',
-                    stroke: space.occupied ? '#F44336' : '#4CAF50',
+                    fill: detectionUnknown(cam) ? 'rgba(158,158,158,0.35)' : space.occupied ? 'rgba(244, 67, 54, 0.4)' : 'rgba(76, 175, 80, 0.4)',
+                    stroke: detectionUnknown(cam) ? '#9E9E9E' : space.occupied ? '#F44336' : '#4CAF50',
                     strokeWidth: 2 / cam.scale,
                     closed: true,
                     name: 'space-polygon',
@@ -568,8 +578,11 @@
         
         <v-card-text class="pa-0 flex-grow-1 d-flex align-center justify-center overflow-hidden" ref="expandedContainer">
           <div class="expanded-stage-wrapper" v-if="expandedImage">
+            <LiveCameraPreview v-if="supportsLivePreview(selectedCamera)" :camera-id="selectedCamera.id"
+              :active="expandedDialog" :width="1280" />
             <v-stage 
               :key="expandedStageKey"
+              style="position: relative; z-index: 1"
               @click="(e) => handleStageClick(e, selectedCamera)"
               @mousemove="(e) => handleMouseMove(e, selectedCamera, expandedScale)"
               :config="{
@@ -580,7 +593,7 @@
               }"
             >
               <v-layer>
-                <v-image :config="{ image: expandedImage }" :key="expandedMeta.scanId" />
+                <v-image v-if="!supportsLivePreview(selectedCamera)" :config="{ image: expandedImage }" :key="expandedMeta.scanId" />
                 <v-line
                   v-for="space in expandedSpaces"
                   :key="space.id"
@@ -595,8 +608,8 @@
                   }"
                   :config="{
                     points: space.points,
-                    fill: space.occupied ? 'rgba(244, 67, 54, 0.4)' : 'rgba(76, 175, 80, 0.4)',
-                    stroke: space.occupied ? '#F44336' : '#4CAF50',
+                    fill: detectionUnknown(selectedCamera) ? 'rgba(158,158,158,0.35)' : space.occupied ? 'rgba(244, 67, 54, 0.4)' : 'rgba(76, 175, 80, 0.4)',
+                    stroke: detectionUnknown(selectedCamera) ? '#9E9E9E' : space.occupied ? '#F44336' : '#4CAF50',
                     strokeWidth: 2 / expandedScale,
                     closed: true,
                     name: 'space-polygon',
@@ -632,6 +645,34 @@ import axios from 'axios';
 import { billingApi } from '../api/billing';
 import { parseTimestamp } from '../utils/format';
 import SpaceHistoryDialog from './SpaceHistoryDialog.vue';
+import LiveCameraPreview from './LiveCameraPreview.vue';
+async function saveEmptyReference(cam) {
+  if (!window.confirm('Clear all marked areas first. Keep the camera fixed. Save this view as the empty reference and enable object testing?')) return;
+  cam.calibrating = true;
+  try {
+    await axios.post(`/api/cameras/${cam.id}/obstruction-reference`);
+    cam.detectionMode = 'obstruction_test';
+    cam.detectionError = 'Calibrating obstruction test';
+  } catch (error) {
+    window.alert(error.response?.data?.detail || 'Could not save the empty reference');
+  } finally { cam.calibrating = false; }
+}
+async function useVehicleMode(cam) {
+  try {
+    await axios.post(`/api/cameras/${cam.id}/obstruction-disable`);
+    cam.detectionMode = 'vehicle'; cam.detectionError = 'Awaiting vehicle inference';
+  } catch (error) { window.alert(error.response?.data?.detail || 'Could not switch detection mode'); }
+}
+
+const detectionUnknown = cam => !!cam?.detectionError || !(cam?.inferenceTime > 0) || (cam?.detectionMode === 'obstruction_test' && now.value.getTime() - new Date(cam.lastUpdated).getTime() > 5000);
+const supportsLivePreview = cam => ['rtsp', 'video'].includes(cam?.source_type);
+function previewDimensions(cam, image) {
+  if (cam.lastWidth === image.naturalWidth && cam.lastHeight === image.naturalHeight) return;
+  cam.bgImage = image;
+  cam.lastWidth = image.naturalWidth; cam.lastHeight = image.naturalHeight;
+  updateStageSize(cam); updateCameraPoints(cam, image);
+}
+
 
 
 const route = useRoute();
@@ -903,6 +944,7 @@ function onIntersect(isIntersecting, cam) {
 }
 
 function loadGridImage(cam) {
+  if (supportsLivePreview(cam)) return;
   const img = new Image();
   // v is scan_id to bypass browser cache
   img.src = `/api/cameras/${cam.id}/snapshot?v=${cam.lastScanId || ''}&width=600`;
@@ -1004,6 +1046,9 @@ async function fetchCameras() {
         occupiedCount: 0,
         totalSpaces: data.spaces.length,
         inferenceTime: initialMeta.inference_speed || 0,
+        detectionError: initialMeta.detection_error || null,
+        detectionMode: initialMeta.detection_mode || 'vehicle',
+        calibrating: false,
         isProcessing: !!initialMeta.is_processing,
         lastUpdated: parseTimestamp(initialMeta.timestamp) || new Date(),
         lastScanId: initialMeta.scan_id || null,
@@ -1171,6 +1216,8 @@ function connectGlobalWs() {
       Object.entries(data).forEach(([sid, info]) => {
         if (sid === 'metadata') {
           cam.inferenceTime = info.inference_speed;
+          cam.detectionError = info.detection_error || null;
+          cam.detectionMode = info.detection_mode || 'vehicle';
           cam.isProcessing = !!info.is_processing;
           if (info.timestamp) {
             cam.lastUpdated = parseTimestamp(info.timestamp) || new Date();
@@ -1411,6 +1458,7 @@ onUnmounted(() => {
   z-index: 2;
 }
 
+.konva-wrapper > :deep(.konvajs-content) { position: relative; z-index: 1; }
 .konva-wrapper {
   width: 100%;
   position: relative;
@@ -1456,4 +1504,8 @@ onUnmounted(() => {
 .cursor-pointer {
   cursor: pointer;
 }
+</style>
+
+<style scoped>
+.expanded-stage-wrapper { position: relative; }
 </style>

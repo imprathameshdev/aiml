@@ -33,6 +33,7 @@ from sqlalchemy import func, text
 from . import models, schemas, auth, inference, scheduler, crud, database
 from .billing import routes as billing_routes
 from .stream_manager import stream_manager
+from . import obstruction
 import signal
 import datetime
 from opentelemetry import trace
@@ -73,6 +74,7 @@ async def lifespan(app: FastAPI):
     init_db.main()
     
     scheduler.start_background()
+    obstruction_task = asyncio.create_task(obstruction.monitor())
     from .alerts import engine as alerts_engine, dispatcher as alerts_dispatcher
     alerts_engine.start_background()
     alerts_dispatcher.start_background()
@@ -80,6 +82,8 @@ async def lifespan(app: FastAPI):
     # Shutdown
     logger.info("Application shutting down, cleaning up...")
     scheduler.stop_background()
+    obstruction_task.cancel()
+    await asyncio.gather(obstruction_task, return_exceptions=True)
     alerts_engine.stop_background()
     alerts_dispatcher.stop_background()
     stream_manager.stop_all()
@@ -95,8 +99,11 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 # OTel app instrumentation happens inside setup_otel if app is passed, 
 # but for FastAPI it's often better to do it here if we want the middleware order correct.
-from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
-FastAPIInstrumentor.instrument_app(app)
+try:
+    from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+    FastAPIInstrumentor.instrument_app(app)
+except (ImportError, Exception) as _otel_err:
+    pass
 
 # --- Immediate Signal Handling to break shutdown deadlocks ---
 def dump_stacks(*args):
@@ -936,7 +943,7 @@ async def get_dashboard_full(db: Session = Depends(get_db), user: models.User = 
             "name": cam.name,
             "source_type": cam.source_type,
             "spaces": spaces_map.get(cam.id, []),
-            "metadata": live_state.get("metadata", {}),
+            "metadata": {**live_state.get("metadata", {}), **({"detection_error": "Detection engine unavailable"} if inference.ENGINE_IMPORT_ERROR and not obstruction.is_enabled(cam.id) else {}), **({"detection_mode": "obstruction_test"} if obstruction.is_enabled(cam.id) else {})},
             "occupancy": {sid: data for sid, data in live_state.items() if sid != "metadata"}
         })
     return results
@@ -973,6 +980,8 @@ async def live_all_ws(websocket: WebSocket):
     # We track the last scan ID and processing state for EVERY camera to know when to broadcast
     last_sent_scan_ids = {} # {camera_id: scan_id}
     last_sent_processing_states = {} # {camera_id: bool}
+    last_sent_detection_errors = {}
+    last_sent_detection_versions = {}
 
     try:
         while True:
@@ -999,7 +1008,9 @@ async def live_all_ws(websocket: WebSocket):
                 has_new_scan = current_scan_id and current_scan_id != last_sent_scan_ids.get(cam_id)
                 has_processing_change = current_processing != last_sent_processing_states.get(cam_id)
 
-                if has_new_scan or has_processing_change:
+                if has_new_scan or has_processing_change or metadata.get('detection_error') != last_sent_detection_errors.get(cam_id) or metadata.get('detection_version') != last_sent_detection_versions.get(cam_id):
+                    last_sent_detection_versions[cam_id] = metadata.get('detection_version')
+                    last_sent_detection_errors[cam_id] = metadata.get('detection_error')
                     updates[cam_id] = cam_data
                     last_sent_scan_ids[cam_id] = current_scan_id
                     last_sent_processing_states[cam_id] = current_processing
@@ -1052,9 +1063,10 @@ async def create_test_camera(
     # Save file
     file_ext = os.path.splitext(file.filename)[1]
     file_name = f"{uuid.uuid4()}{file_ext}"
-    file_path = os.path.join("uploads/cameras", file_name)
+    upload_dir = os.path.join(config.DATA_DIR, "uploads", "cameras")
+    os.makedirs(upload_dir, exist_ok=True)
+    file_path = os.path.abspath(os.path.join(upload_dir, file_name)).replace('\\', '/')
     
-    os.makedirs("uploads/cameras", exist_ok=True)
     with open(file_path, "wb") as buffer:
         while True:
             chunk = await file.read(1024 * 1024)
@@ -1101,11 +1113,14 @@ async def upload_camera_video(
     
     # Save the file
     file_id = str(uuid.uuid4())
-    ext = file.filename.split('.')[-1]
-    filename = f"video_{file_id}.{ext}"
-    file_path = os.path.join("uploads/cameras", filename)
+    ext = os.path.splitext(file.filename)[1] or ".mp4"
+    filename = f"video_{file_id}{ext}"
+    # Keep uploads alongside the persistent database. Relative paths in
+    # /app disappear when Docker recreates the container.
+    upload_dir = os.path.join(config.DATA_DIR, "uploads", "cameras")
+    os.makedirs(upload_dir, exist_ok=True)
+    file_path = os.path.abspath(os.path.join(upload_dir, filename)).replace('\\', '/')
     
-    os.makedirs("uploads/cameras", exist_ok=True)
     with open(file_path, "wb") as buffer:
         while True:
             chunk = await file.read(1024 * 1024) # 1MB chunks
@@ -1117,9 +1132,13 @@ async def upload_camera_video(
         db_cam = db.query(models.Camera).filter_by(id=camera_id).first()
         if not db_cam:
             raise HTTPException(status_code=404, detail="Camera not found")
+        stream_manager.stop_stream(camera_id)
         db_cam.name = name
         db_cam.source_type = "video"
-        db_cam.stream_url = file_path # We store file path in stream_url for video types
+        db_cam.stream_url = file_path # We store normalized file path in stream_url for video types
+        db_cam.is_test = False
+        db_cam.local_path = None
+        db_cam.snapshot_url = None
         db.commit()
         db.refresh(db_cam)
         scheduler.trigger_inference()
@@ -1390,7 +1409,8 @@ async def _acquire_camera_image_bytes(cam: models.Camera, v: Optional[str], db: 
                 set_cached_live_frame(cam.id, data)
                 return data
 
-            stream_manager.start_stream(
+            await asyncio.to_thread(
+                stream_manager.start_stream,
                 cam.id,
                 cam.source_type,
                 cam.stream_url,
@@ -1415,6 +1435,44 @@ async def _acquire_camera_image_bytes(cam: models.Camera, v: Optional[str], db: 
         raise HTTPException(status_code=502, detail=f"Failed to fetch snapshot: {str(e)}")
 
 
+
+@app.get("/api/cameras/{camera_id}/preview")
+async def camera_live_preview(camera_id: int, request: Request,
+        width: int = Query(960, ge=320, le=1280),
+        db: Session = Depends(get_db), user: models.User = Depends(require_auth)):
+    """Live JPEG preview using the shared capture. Does not invoke inference."""
+    cam = db.query(models.Camera).filter_by(id=camera_id, is_enabled=True).first()
+    if cam is None:
+        raise HTTPException(status_code=404, detail="Camera not found")
+    if cam.source_type not in ("rtsp", "video"):
+        raise HTTPException(status_code=400, detail="Live preview requires RTSP or a video source")
+    params = (cam.id, cam.source_type, cam.stream_url, cam.stream_user, cam.stream_password)
+    options = dict(res=cam.stream_resolution, fps=cam.stream_fps,
+                   youtube_mode=getattr(cam, 'youtube_mode', 'stream'))
+    def encode(frame):
+        h, w = frame.shape[:2]
+        if w > width:
+            frame = cv2.resize(frame, (width, max(1, round(h * width / w))), interpolation=cv2.INTER_AREA)
+        ok, jpeg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+        return jpeg.tobytes() if ok else None
+    async def frames():
+        last_start = 0.0
+        while not await request.is_disconnected():
+            started = time.monotonic()
+            # Reuse capture and periodically retry disconnected sources.
+            if started - last_start >= 2:
+                await asyncio.to_thread(stream_manager.start_stream, *params, **options)
+                last_start = started
+            frame = stream_manager.get_latest_frame(camera_id, since=time.time() - 3)
+            if frame is not None:
+                jpeg = await asyncio.to_thread(encode, frame)
+                if jpeg:
+                    yield (b'--frame\r\nContent-Type: image/jpeg\r\nContent-Length: ' +
+                           str(len(jpeg)).encode() + b'\r\n\r\n' + jpeg + b'\r\n')
+            await asyncio.sleep(max(0.01, 0.2 - (time.monotonic() - started)))
+    return StreamingResponse(frames(), media_type='multipart/x-mixed-replace; boundary=frame',
+        headers={'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no'})
+
 @app.get("/api/cameras/{camera_id}/snapshot")
 async def get_camera_snapshot(camera_id: int, v: Optional[str] = Query(None), width: Optional[int] = Query(None), force: bool = Query(False), db: Session = Depends(get_db)):
     cam = None
@@ -1432,6 +1490,50 @@ async def get_camera_snapshot(camera_id: int, v: Optional[str] = Query(None), wi
         clear_live_frame_cache_for(cam.id)
     img_data = await _acquire_camera_image_bytes(cam, v, db)
     return await finalize_image_response(img_data, width, camera_id, v)
+
+
+@app.post("/api/cameras/{camera_id}/obstruction-reference")
+async def set_obstruction_reference(camera_id: int,
+        sensitivity: float = Query(0.12, ge=0.02, le=0.5),
+        db: Session = Depends(get_db), user: models.User = Depends(require_auth)):
+    if not auth.check_permission_direct(user, 'manage_cameras'):
+        raise HTTPException(status_code=403, detail='Missing camera management permission')
+    cam = db.query(models.Camera).filter_by(id=camera_id, is_enabled=True).first()
+    if not cam: raise HTTPException(status_code=404, detail='Camera not found')
+    if cam.source_type not in ('rtsp', 'video'):
+        raise HTTPException(status_code=400, detail='Testing requires a live camera/video')
+    areas = [{'id': s.id, 'points': s.points} for s in db.query(models.Space).filter_by(camera_id=camera_id).all()]
+    try:
+        obstruction.normalize_areas(areas)
+        await asyncio.to_thread(stream_manager.start_stream, cam.id, cam.source_type, cam.stream_url,
+            cam.stream_user, cam.stream_password, res=cam.stream_resolution, fps=cam.stream_fps)
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            frame = stream_manager.get_latest_frame(camera_id, since=time.time()-2)
+            if frame is not None: break
+            await asyncio.sleep(0.1)
+        else: raise HTTPException(status_code=503, detail='No fresh frame; check camera connection')
+        await asyncio.to_thread(obstruction.save_reference, camera_id, frame.copy(), areas, sensitivity)
+        scheduler._state_cache.setdefault(camera_id, {}).setdefault('metadata', {}).update(
+            detection_mode='obstruction_test', detection_error='Calibrating obstruction test',
+            detection_version=time.time_ns(), inference_speed=0, is_processing=False)
+        return {'mode': 'obstruction_test', 'areas': len(areas), 'sensitivity': sensitivity}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+@app.post("/api/cameras/{camera_id}/obstruction-disable")
+async def disable_obstruction_test(camera_id: int, db: Session = Depends(get_db),
+        user: models.User = Depends(require_auth)):
+    if not auth.check_permission_direct(user, 'manage_cameras'):
+        raise HTTPException(status_code=403, detail='Missing camera management permission')
+    if not db.query(models.Camera).filter_by(id=camera_id).first():
+        raise HTTPException(status_code=404, detail='Camera not found')
+    await asyncio.to_thread(obstruction.disable, camera_id)
+    scheduler._state_cache[camera_id] = {'metadata': {
+        'detection_mode': 'vehicle', 'detection_error': 'Awaiting vehicle inference',
+        'inference_speed': 0, 'is_processing': False, 'detection_version': time.time_ns()}}
+    scheduler.trigger_inference()
+    return {'mode': 'vehicle'}
 
 @app.post("/api/cameras/{camera_id}/test-occupancy")
 async def test_occupancy(camera_id: int, spaces: List[schemas.SpaceUpdate], v: Optional[int] = Query(None), db: Session = Depends(get_db), user: models.User = Depends(require_auth)):
